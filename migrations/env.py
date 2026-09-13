@@ -29,9 +29,7 @@ target_metadata = Base.metadata
 # caller's settings). Only fall back to the ambient config when it is absent —
 # otherwise every migration would silently target the default database.
 if not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option(
-        "sqlalchemy.url", load_settings().resolved_database_url()
-    )
+    config.set_main_option("sqlalchemy.url", load_settings().resolved_database_url())
 
 
 def run_migrations_offline() -> None:

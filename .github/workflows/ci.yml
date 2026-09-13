@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep gunicorn/uvicorn from buffering logs in CI output.
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Verify uv.lock matches pyproject
+        run: uv lock --check
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: ruff check
+        run: uv run --no-sync ruff check src tests examples migrations
+
+      - name: ruff format (check only)
+        run: uv run --no-sync ruff format --check src tests examples migrations
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # Bump to a matrix (e.g. ["3.11", "3.13"]) if we ever need to honour the
+    # full `requires-python = ">=3.10"` range. Deployments pin 3.13 today.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        # The suite needs a writable tmpdir; macOS/ Linux CI both work when we
+        # point TMPDIR and --basetemp inside the workspace.
+        run: |
+          mkdir -p .tmp
+          TMPDIR=$PWD/.tmp uv run --no-sync \
+            pytest --basetemp=$PWD/.tmp/pytest -p no:cacheprovider
+
+      - name: Upgrade a fresh database to head
+        env:
+          GYRA_USER_DATABASE_URL: sqlite:///${{ github.workspace }}/.tmp/ci.db
+          GYRA_USER_JWT_SECRET: ci-only-secret-0123456789abcdefghijklmnop
+        run: uv run --no-sync gyra-user db upgrade
+
+      - name: Show migration head
+        env:
+          GYRA_USER_DATABASE_URL: sqlite:///${{ github.workspace }}/.tmp/ci.db
+          GYRA_USER_JWT_SECRET: ci-only-secret-0123456789abcdefghijklmnop
+        run: uv run --no-sync gyra-user db current
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # No Docker daemon locally, so this is the only place the Dockerfile
+      # actually gets executed. Build only — nothing is published.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: gyra-user:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          docker run --rm -d --name gyra-user-ci \
+            -e GYRA_USER_JWT_SECRET=ci-only-secret-0123456789abcdefghijklmnop \
+            -e GYRA_USER_PUBLIC_BASE_URL=http://localhost:8100 \
+            -p 8100:8100 gyra-user:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8100/healthz; then echo; break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8100/.well-known/openid-configuration \
+            | head -c 200; echo
+          docker rm -f gyra-user-ci

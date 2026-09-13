@@ -41,7 +41,9 @@ def test_missing_public_base_url_is_flagged_when_oidc_enabled():
 
 
 def test_plaintext_base_url_is_flagged():
-    problems = _settings(public_base_url="http://auth.example.com").production_problems()
+    problems = _settings(
+        public_base_url="http://auth.example.com"
+    ).production_problems()
     assert any("plain HTTP" in p for p in problems)
 
 

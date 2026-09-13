@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # uv.lock 里的 Python 依赖
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+
+  # GitHub Actions 自身的版本
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels: [dependencies, ci]
