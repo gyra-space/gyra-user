@@ -1,0 +1,37 @@
+[Unit]
+Description=gyra-user — 统一用户中心 / OIDC Provider
+Documentation=file:///opt/gyra-user/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gyra
+Group=gyra
+WorkingDirectory=/opt/gyra-user
+Environment=PATH=/opt/gyra-user/.venv/bin:/usr/bin:/bin
+Environment=GYRA_USER_DATA_DIR=/var/lib/gyra-user
+EnvironmentFile=-/etc/gyra-user/env
+
+# 起服前先跑迁移；失败就不起，避免带着旧表结构对外服务
+ExecStartPre=/opt/gyra-user/.venv/bin/gyra-user db upgrade
+ExecStart=/opt/gyra-user/.venv/bin/gunicorn gyra_user.app:app \
+    -k uvicorn.workers.UvicornWorker \
+    --bind 127.0.0.1:8100 \
+    --workers 4 \
+    --access-logfile - --error-logfile -
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gyra-user
+PrivateDevices=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

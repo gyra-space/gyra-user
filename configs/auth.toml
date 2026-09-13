@@ -1,0 +1,90 @@
+# Gyra 用户中心配置
+# 优先级: 默认值 < 本文件 < GYRA_USER_* 环境变量
+# 复制为 configs/auth.local.toml 或直接用环境变量覆盖密钥，不要把密钥提交到仓库。
+
+app_name = "Gyra User Center"
+data_dir = "data"
+# database_url = "sqlite:///data/gyra_user.db"   # 也可换成 mysql+pymysql://...
+
+# ── 令牌 ──────────────────────────────────────────────────────────────
+# 生产环境务必通过 GYRA_USER_JWT_SECRET 注入，否则会在 data/.jwt_secret 生成随机密钥
+jwt_algorithm = "HS256"        # HS256 | RS256(需配 jwt_private_key/jwt_public_key)
+jwt_issuer = "gyra-user"
+jwt_audience = "gyra"
+access_token_ttl = 1800        # 30 分钟
+refresh_token_ttl = 604800     # 7 天
+refresh_token_rotation = true  # 每次刷新轮换旧 token
+
+# ── OIDC Provider（单点登录）──────────────────────────────────────────
+# 本服务同时是一个标准 OIDC 提供方，其它应用接进来即可共享登录态。
+oidc_enabled = true
+id_token_ttl = 3600            # id_token 有效期
+authorization_code_ttl = 60    # 授权码有效期，RFC 建议不超过 10 分钟
+# 生产环境建议切 RS256 并生成密钥：python -m gyra_user.cli gen-keys --out-dir data
+# jwt_algorithm = "RS256"
+# jwt_private_key_file = "data/jwt_private.pem"
+# jwt_public_key_file = "data/jwt_public.pem"
+
+# ── Cookie ────────────────────────────────────────────────────────────
+cookie_name = "gyra_session"
+cookie_samesite = "lax"
+# cookie_domain = ".example.com"   # 留空则自动按父域名推导，localhost 不设置
+
+# ── 本地账号 ──────────────────────────────────────────────────────────
+allow_local_login = true
+allow_registration = true
+require_approval = false
+default_role = "normal"
+
+# ── 行为 ──────────────────────────────────────────────────────────────
+link_by_email = true           # OAuth 邮箱命中已有账号时自动绑定
+auth_required = true
+frontend_login_path = "/login"
+frontend_callback_path = "/auth/callback"
+
+# ── 迁移兼容 ──────────────────────────────────────────────────────────
+# 填入 Gyra 的 OAUTH2_SESSION_SECRET 后，本服务可继续验签旧 session token，
+# 实现灰度切换（旧 token 过期后即可关掉）。
+# legacy_session_secret = ""
+# legacy_secret_file = "/path/to/gyra-home/.session_secret"
+
+# ── 第三方登录 ────────────────────────────────────────────────────────
+[[providers]]
+id = "github"
+type = "github"                # 固定
+label = "GitHub"
+client_id = ""                 # 或 GYRA_USER_GITHUB_CLIENT_ID
+client_secret = ""             # 或 GYRA_USER_GITHUB_CLIENT_SECRET
+scope = "read:user user:email"
+
+[[providers]]
+id = "wechat"
+type = "wechat_open"           # 微信开放平台「网站应用」扫码登录
+label = "微信"
+client_id = ""                 # 开放平台 AppID
+client_secret = ""             # 开放平台 AppSecret
+scope = "snsapi_login"
+
+# [[providers]]
+# id = "wechat_mp"
+# type = "wechat_mp"           # 公众号网页授权，仅微信内置浏览器可用
+# label = "微信公众号"
+# client_id = ""
+# client_secret = ""
+# scope = "snsapi_userinfo"
+
+# [[providers]]
+# id = "corp"
+# type = "oidc"                # 任意标准 OAuth2/OIDC，填三个 URL + 字段路径即可
+# label = "企业 SSO"
+# client_id = ""
+# client_secret = ""
+# scope = "openid profile email"
+# authorization_url = "https://sso.example.com/oauth2/authorize"
+# token_url = "https://sso.example.com/oauth2/token"
+# userinfo_url = "https://sso.example.com/oauth2/userinfo"
+# id_path = "sub"
+# username_path = "preferred_username"
+# name_path = "name"
+# email_path = "email"
+# avatar_path = "picture"

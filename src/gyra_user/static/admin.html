@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>管理后台 · Gyra 用户中心</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #fff;
+    --border: #e5e8ef;
+    --text: #1f2329;
+    --muted: #8a92a6;
+    --primary: #4f46e5;
+    --primary-hover: #4338ca;
+    --danger: #d4380d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    background: #fff; border-bottom: 1px solid var(--border); padding: 14px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header .brand { font-size: 15px; font-weight: 600; }
+  header nav { display: flex; gap: 18px; font-size: 13px; }
+  header nav a { color: var(--muted); text-decoration: none; }
+  header nav a:hover { color: var(--primary); }
+  main { max-width: 900px; margin: 24px auto; padding: 0 20px; }
+  .tabs { display: flex; gap: 4px; background: #eceef2; padding: 4px; border-radius: 10px;
+          margin-bottom: 18px; width: fit-content; }
+  .tabs button {
+    border: 0; background: transparent; padding: 7px 18px; border-radius: 7px;
+    font-size: 13px; color: var(--muted); cursor: pointer; font-family: inherit;
+  }
+  .tabs button[aria-selected="true"] { background: #fff; color: var(--text); font-weight: 600; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px 24px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+  .card .hint { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 14px; }
+  input, textarea, select {
+    width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 13px; outline: none; font-family: inherit; color: var(--text); background: #fff;
+  }
+  textarea { min-height: 76px; resize: vertical; font-family: ui-monospace, Menlo, monospace; }
+  input:focus, textarea:focus, select:focus { border-color: var(--primary); }
+  .toolbar input { width: 220px; }
+  label { display: block; font-size: 13px; margin-bottom: 6px; color: #4e5969; }
+  .field { margin-bottom: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  button {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: #fff; cursor: pointer; font-size: 13px; font-family: inherit; color: var(--text);
+  }
+  button:hover { background: #fafafa; }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover { background: var(--primary-hover); }
+  button.danger { color: var(--danger); border-color: #ffccc7; }
+  button.sm { padding: 4px 10px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px;
+       padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 8px; border-bottom: 1px solid #f2f3f6; vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+  .alert { padding: 9px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; display: none; }
+  .alert.error { background: #fff2f0; color: var(--danger); border: 1px solid #ffccc7; }
+  .alert.ok { background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; }
+  .secret {
+    background: #fffbe6; border: 1px solid #ffe58f; border-radius: 8px; padding: 12px 14px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all;
+    margin-top: 12px;
+  }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Gyra 用户中心 · 管理后台</div>
+  <nav>
+    <a href="/login">登录页</a>
+    <a href="/account">个人中心</a>
+    <a href="/docs">API 文档</a>
+    <a href="#" id="link-logout">退出</a>
+  </nav>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button id="tab-users" role="tab" aria-selected="true">用户</button>
+    <button id="tab-apps" role="tab" aria-selected="false">接入应用（SSO）</button>
+    <button id="tab-events" role="tab" aria-selected="false">登录日志</button>
+  </div>
+
+  <div id="pane-users">
+    <div class="card">
+      <h2>用户</h2>
+      <div class="hint">停用用户会立即吊销其全部会话。</div>
+      <div class="toolbar">
+        <input id="keyword" placeholder="搜索用户名 / 昵称 / 邮箱" />
+        <button id="btn-search">搜索</button>
+        <button class="primary" id="btn-reload">刷新</button>
+      </div>
+      <table>
+        <thead><tr><th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="users"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="pane-apps" style="display:none">
+    <div class="card">
+      <h2>注册接入应用</h2>
+      <div class="hint">应用通过 OIDC 授权码流程接入，注册后请把 client_id / client_secret 交给对方。</div>
+      <div id="alert" class="alert"></div>
+      <div class="grid2">
+        <div class="field">
+          <label for="app-name">应用名称</label>
+          <input id="app-name" placeholder="例如 Gyra Web" />
+        </div>
+        <div class="field">
+          <label for="app-home">主页地址</label>
+          <input id="app-home" placeholder="https://app.example.com" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="app-redirect">回调地址（每行一个，必须与实际完全一致）</label>
+        <textarea id="app-redirect" placeholder="http://localhost:3000/api/auth/callback"></textarea>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label for="app-scope">允许的权限范围</label>
+          <input id="app-scope" value="openid profile email" />
+        </div>
+        <div class="field">
+          <label for="app-type">应用类型</label>
+          <select id="app-type">
+            <option value="confidential">机密客户端（有后端，可保存密钥）</option>
+            <option value="public">公开客户端（SPA / 移动端，必须走 PKCE）</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" id="app-skip" style="width:auto;margin-right:6px" />跳过授权确认页（内部应用，实现真正的单点登录）</label>
+      </div>
+      <button class="primary" id="btn-create-app">注册应用</button>
+      <div id="secret-box"></div>
+    </div>
+
+    <div class="card">
+      <h2>已注册应用</h2>
+      <div class="hint">轮换密钥会立即让旧密钥失效。</div>
+      <table>
+        <thead><tr><th>名称</th><th>client_id</th><th>回调地址</th><th>范围</th><th>操作</th></tr></thead>
+        <tbody id="clients"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="pane-events" style="display:none">
+    <div class="card">
+      <h2>最近登录日志</h2>
+      <table>
+        <thead><tr><th>时间</th><th>用户</th><th>动作</th><th>来源</th><th>IP</th><th>结果</th></tr></thead>
+        <tbody id="events"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = "/api/v1";
+const $ = (id) => document.getElementById(id);
+
+function showAlert(msg, kind = "ok") {
+  const el = $("alert");
+  el.textContent = msg;
+  el.className = "alert " + kind;
+  el.style.display = "block";
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(API + path, {
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (res.status === 401 || res.status === 403) {
+    location.href = "/login";
+    throw new Error("forbidden");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+function selectTab(name) {
+  ["users", "apps", "events"].forEach((n) => {
+    $("tab-" + n).setAttribute("aria-selected", String(n === name));
+    $("pane-" + n).style.display = n === name ? "block" : "none";
+  });
+  if (name === "users") loadUsers();
+  if (name === "apps") loadClients();
+  if (name === "events") loadEvents();
+}
+
+function emptyRow(tbody, text, cols) {
+  tbody.innerHTML = "";
+  const tr = document.createElement("tr");
+  const td = document.createElement("td");
+  td.colSpan = cols;
+  td.className = "empty";
+  td.textContent = text;
+  tr.appendChild(td);
+  tbody.appendChild(tr);
+}
+
+function btn(text, cls, handler) {
+  const b = document.createElement("button");
+  b.className = "sm " + cls;
+  b.textContent = text;
+  b.onclick = handler;
+  return b;
+}
+
+async function loadUsers() {
+  const keyword = $("keyword").value.trim();
+  const data = await api(`/admin/users?limit=100${keyword ? "&keyword=" + encodeURIComponent(keyword) : ""}`);
+  const tbody = $("users");
+  tbody.innerHTML = "";
+  if (!data.items.length) return emptyRow(tbody, "没有匹配的用户", 7);
+  data.items.forEach((u) => {
+    const tr = document.createElement("tr");
+    [u.id, u.name, u.fullname || "-", u.email || "-"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const roleTd = document.createElement("td");
+    const select = document.createElement("select");
+    ["normal", "admin"].forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r;
+      opt.textContent = r;
+      if (u.role === r) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.onchange = async () => {
+      await api(`/admin/users/${u.id}`, { method: "PATCH", body: JSON.stringify({ role: select.value }) });
+      loadUsers();
+    };
+    roleTd.appendChild(select);
+    tr.appendChild(roleTd);
+
+    const statusTd = document.createElement("td");
+    statusTd.innerHTML = u.is_pending
+      ? '<span class="muted">待审核</span>'
+      : (u.is_active ? '<span class="muted">正常</span>' : '<span class="muted" style="color:#d4380d">已停用</span>');
+    tr.appendChild(statusTd);
+
+    const actions = document.createElement("td");
+    const wrap = document.createElement("div");
+    wrap.className = "actions";
+    wrap.appendChild(btn(u.is_active ? "停用" : "启用", "", async () => {
+      await api(`/admin/users/${u.id}`, { method: "PATCH", body: JSON.stringify({ is_active: !u.is_active }) });
+      loadUsers();
+    }));
+    wrap.appendChild(btn("重置密码", "", async () => {
+      const pwd = prompt("输入新密码（至少 6 位）");
+      if (!pwd) return;
+      await api(`/admin/users/${u.id}/reset-password`, { method: "POST", body: JSON.stringify({ password: pwd }) });
+      alert("密码已重置");
+    }));
+    wrap.appendChild(btn("踢下线", "", async () => {
+      await api(`/admin/users/${u.id}/revoke-sessions`, { method: "POST" });
+      alert("已吊销全部会话");
+    }));
+    wrap.appendChild(btn("删除", "danger", async () => {
+      if (!confirm(`确认删除用户 ${u.name}？`)) return;
+      await api(`/admin/users/${u.id}`, { method: "DELETE" });
+      loadUsers();
+    }));
+    actions.appendChild(wrap);
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadClients() {
+  const data = await api("/admin/clients?limit=100");
+  const tbody = $("clients");
+  tbody.innerHTML = "";
+  if (!data.items.length) return emptyRow(tbody, "还没有注册任何应用", 5);
+  data.items.forEach((c) => {
+    const tr = document.createElement("tr");
+    [c.name, c.client_id].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const uriTd = document.createElement("td");
+    uriTd.innerHTML = `<div class="muted">${c.redirect_uris.join("<br>")}</div>`;
+    tr.appendChild(uriTd);
+    const scopeTd = document.createElement("td");
+    scopeTd.innerHTML = `<div class="muted">${c.scope}</div>`;
+    tr.appendChild(scopeTd);
+
+    const actions = document.createElement("td");
+    const wrap = document.createElement("div");
+    wrap.className = "actions";
+    wrap.appendChild(btn(c.is_active ? "停用" : "启用", "", async () => {
+      await api(`/admin/clients/${c.client_id}`, { method: "PATCH", body: JSON.stringify({ is_active: !c.is_active }) });
+      loadClients();
+    }));
+    wrap.appendChild(btn("轮换密钥", "", async () => {
+      if (!confirm("轮换后旧密钥立即失效，确认？")) return;
+      const d = await api(`/admin/clients/${c.client_id}/rotate-secret`, { method: "POST" });
+      $("secret-box").innerHTML = `<div class="secret"><b>${d.name}</b> 的新密钥（只显示一次）<br>client_id: ${d.client_id}<br>client_secret: ${d.client_secret}</div>`;
+    }));
+    wrap.appendChild(btn("删除", "danger", async () => {
+      if (!confirm(`确认删除应用 ${c.name}？该应用的所有授权将失效。`)) return;
+      await api(`/admin/clients/${c.client_id}`, { method: "DELETE" });
+      loadClients();
+    }));
+    actions.appendChild(wrap);
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadEvents() {
+  const items = await api("/admin/login-events?limit=50");
+  const tbody = $("events");
+  tbody.innerHTML = "";
+  if (!items.length) return emptyRow(tbody, "暂无记录", 6);
+  items.forEach((e) => {
+    const tr = document.createElement("tr");
+    [(e.gmt_create || "").slice(0, 19).replace("T", " "), e.username || e.user_id || "-",
+     e.action, e.provider || "-", e.ip || "-", e.success ? "成功" : "失败"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+$("tab-users").onclick = () => selectTab("users");
+$("tab-apps").onclick = () => selectTab("apps");
+$("tab-events").onclick = () => selectTab("events");
+$("btn-search").onclick = loadUsers;
+$("btn-reload").onclick = loadUsers;
+$("keyword").addEventListener("keydown", (e) => { if (e.key === "Enter") loadUsers(); });
+
+$("btn-create-app").onclick = async () => {
+  const name = $("app-name").value.trim();
+  const uris = $("app-redirect").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!name) return showAlert("请填写应用名称", "error");
+  if (!uris.length) return showAlert("至少填写一个回调地址", "error");
+  const isConfidential = $("app-type").value === "confidential";
+  try {
+    const d = await api("/admin/clients", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        redirect_uris: uris,
+        scope: $("app-scope").value.trim() || "openid profile email",
+        is_confidential: isConfidential,
+        skip_consent: $("app-skip").checked,
+        homepage_url: $("app-home").value.trim() || undefined,
+      }),
+    });
+    $("secret-box").innerHTML =
+      `<div class="secret"><b>${d.name}</b> 注册成功，密钥只显示这一次，请立即保存：<br>` +
+      `client_id: ${d.client_id}<br>` +
+      `client_secret: ${d.client_secret || "（公开客户端，无密钥，必须走 PKCE）"}</div>`;
+    $("app-name").value = "";
+    $("app-redirect").value = "";
+    showAlert("应用已注册", "ok");
+    loadClients();
+  } catch (err) { showAlert(err.message, "error"); }
+};
+
+$("link-logout").onclick = async (e) => {
+  e.preventDefault();
+  await fetch("/api/v1/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
+  location.href = "/login";
+};
+
+loadUsers();
+</script>
+</body>
+</html>

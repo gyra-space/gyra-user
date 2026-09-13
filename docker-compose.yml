@@ -1,0 +1,29 @@
+services:
+  gyra-user:
+    build: .
+    image: gyra-user:0.2.0
+    container_name: gyra-user
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+    env_file:
+      - .env
+    environment:
+      # 反代后面必须填真实外网地址，否则 redirect_uri / issuer 会是容器内部地址
+      GYRA_USER_PUBLIC_BASE_URL: ${GYRA_USER_PUBLIC_BASE_URL:-http://localhost:8100}
+      # 上线前改成 production：会自动启用启动自检（弱密钥 / http 地址直接拒绝启动）
+      GYRA_USER_ENVIRONMENT: ${GYRA_USER_ENVIRONMENT:-development}
+      GYRA_USER_DATA_DIR: /data
+      # GYRA_USER_DATABASE_URL: sqlite:////data/gyra_user.db
+      WORKERS: 2
+    volumes:
+      - gyra-user-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8100/healthz')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  gyra-user-data:
