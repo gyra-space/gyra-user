@@ -93,7 +93,7 @@ jobs:
       # No Docker daemon locally, so this is the only place the Dockerfile
       # actually gets executed. Build only — nothing is published.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
