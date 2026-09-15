@@ -13,7 +13,8 @@ data/
 .env
 configs/auth.local.toml
 .workbuddy/
-README.md
+# README.md 不能排除：pyproject 的 readme 指向它，hatchling 打包时要读，
+# 缺了会让 `uv sync --no-editable` 在镜像里直接失败。
 Makefile
 examples/
 tests/
