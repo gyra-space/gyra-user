@@ -57,6 +57,23 @@ def _dig(data: Dict[str, Any], dotted_path: str) -> Optional[Any]:
     return current
 
 
+def _as_bool(value: Any) -> bool:
+    """Interpret the ``email_verified`` claim, which providers spell freely.
+
+    OIDC says it is a JSON boolean, but real providers send ``"true"``,
+    ``1`` or omit it entirely. Anything we cannot read as a positive
+    assertion counts as *not* verified: this value decides whether an address
+    may be used to merge two accounts, so the safe default is what matters.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return False
+
+
 class OAuth2Provider:
     """Base implementation of the OAuth2 authorization-code flow."""
 
@@ -168,6 +185,7 @@ class OAuth2Provider:
             username=str(_dig(payload, cfg.username_path) or ""),
             display_name=str(_dig(payload, cfg.name_path) or ""),
             email=_dig(payload, cfg.email_path),
+            email_verified=_as_bool(_dig(payload, cfg.email_verified_path)),
             avatar_url=_dig(payload, cfg.avatar_path),
             raw=payload,
         )

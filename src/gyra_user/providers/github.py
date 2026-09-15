@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from gyra_user.providers.base import OAuth2Provider, OAuthProfile, TokenResponse
 
@@ -32,9 +32,16 @@ class GitHubProvider(OAuth2Provider):
     async def fetch_profile(self, token: TokenResponse) -> OAuthProfile:
         payload = await self._get_userinfo(token.access_token)
         profile = self.normalize_profile(payload)
-        if not profile.email:
-            profile.email = await self._primary_email(token.access_token)
-            profile.email_verified = bool(profile.email)
+        # /user only exposes the *public profile* address and says nothing
+        # about whether it is verified, so /user/emails is what decides
+        # verification. When no address can be confirmed there, whatever
+        # /user supplied stays on the profile but unverified.
+        email, verified = await self._primary_email(token.access_token)
+        if email:
+            profile.email = email
+            profile.email_verified = True
+        else:
+            profile.email_verified = False
         if not profile.username:
             profile.username = profile.display_name or f"gh_{profile.subject}"
         return profile
@@ -55,7 +62,14 @@ class GitHubProvider(OAuth2Provider):
             raw=payload,
         )
 
-    async def _primary_email(self, access_token: str) -> str:
+    async def _primary_email(self, access_token: str) -> Tuple[str, bool]:
+        """Return ``(email, verified)`` for an address GitHub vouches for.
+
+        GitHub also keeps unverified addresses on file. Returning one as if it
+        were confirmed would let anyone type a stranger's address into their
+        GitHub profile and inherit that stranger's account here, so unverified
+        entries yield ``("", False)``.
+        """
         try:
             emails: List[Dict[str, Any]] = await self._request_json(
                 "GET",
@@ -66,16 +80,16 @@ class GitHubProvider(OAuth2Provider):
                 },
             )
         except Exception:  # noqa: BLE001 - email is best-effort
-            return ""
+            return "", False
         if not isinstance(emails, list):
-            return ""
+            return "", False
         for item in emails:
             if item.get("primary") and item.get("verified"):
-                return str(item.get("email", ""))
+                return str(item.get("email", "")), True
         for item in emails:
             if item.get("verified"):
-                return str(item.get("email", ""))
-        return emails[0].get("email", "") if emails else ""
+                return str(item.get("email", "")), True
+        return "", False
 
 
 __all__ = ["GitHubProvider"]

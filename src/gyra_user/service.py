@@ -104,6 +104,11 @@ class UserService:
             name=username,
             fullname=fullname or username,
             email=email or None,
+            # Nobody has proven they own this address, so it must not become
+            # an identity anchor for account linking (see
+            # ``_link_target_by_email``). It flips to True only once a
+            # verification channel actually confirms it.
+            email_verified=False,
             password_hash=hash_password(password),
             role=role or self.settings.default_role,
             is_active=False if pending else True,
@@ -154,8 +159,11 @@ class UserService:
         Linking order:
         1. ``(provider, subject)`` already bound            -> log in
         2. ``unionid`` bound to any account (WeChat)        -> link & log in
-        3. same verified email, when ``link_by_email``      -> link & log in
+        3. same email, verified on *both* sides             -> link & log in
         4. otherwise                                        -> create account
+
+        Step 3 is deliberately strict; see :meth:`_link_target_by_email` for
+        why an unverified address must never merge two identities.
         """
         token_payload = token_payload or {}
         binding = self.get_oauth_account(profile.provider, profile.subject)
@@ -166,19 +174,25 @@ class UserService:
         if profile.unionid:
             user = self._find_by_unionid(profile.unionid)
 
-        if user is None and self.settings.link_by_email and profile.email:
-            user = self.get_by_email(profile.email)
+        if user is None:
+            user = self._link_target_by_email(profile)
 
         created = user is None
         if user is None:
             if not profile.is_complete():
                 raise UserServiceError("OAuth profile is incomplete", 400)
             pending = self.settings.require_approval
+            email = profile.email
+            if email and self.get_by_email(email) is not None:
+                # We declined to merge and the address still belongs to the
+                # account already holding it. Leave it off this account: one
+                # address must never map to two identities.
+                email = None
             user = User(
                 name=self._unique_username(profile),
                 fullname=profile.display_name or profile.username or profile.subject,
-                email=profile.email,
-                email_verified=bool(profile.email and profile.email_verified),
+                email=email,
+                email_verified=bool(email and profile.email_verified),
                 avatar=profile.avatar_url,
                 role=self.settings.default_role,
                 is_active=False if pending else True,
@@ -213,6 +227,73 @@ class UserService:
             user.oauth_id = profile.subject
         self.session.flush()
         return user, created
+
+    def _link_target_by_email(self, profile: OAuthProfile) -> Optional[User]:
+        """Pick the account an OAuth identity may merge into, by email.
+
+        An address only proves identity when *both* sides have demonstrated
+        they own it. A provider that hands over an unverified address proved
+        nothing, and neither did a local account that merely typed one in —
+        trusting either lets an attacker register ``victim@example.com``
+        first and then silently absorb the victim's OAuth login.
+        """
+        if not self.settings.link_by_email or not profile.email:
+            return None
+
+        candidate = self.get_by_email(profile.email)
+        if candidate is None:
+            return None
+
+        if not self.settings.link_by_email_requires_verified:
+            return candidate
+
+        if not profile.email_verified:
+            self.record_event(
+                candidate.id,
+                "link_refused",
+                success=False,
+                provider=profile.provider,
+                username=profile.email or "",
+                detail="provider did not verify the address",
+            )
+            return None
+
+        if not candidate.email_verified:
+            # The provider just proved ownership; the local account never did.
+            if self.settings.reclaim_unverified_email:
+                self._reclaim_email(candidate, profile)
+            else:
+                self.record_event(
+                    candidate.id,
+                    "link_refused",
+                    success=False,
+                    provider=profile.provider,
+                    username=profile.email or "",
+                    detail="existing account address is unverified",
+                )
+            return None
+
+        return candidate
+
+    def _reclaim_email(self, squatter: User, profile: OAuthProfile) -> None:
+        """Move an unverified address to the identity that just proved it.
+
+        The holder never demonstrated ownership, so the address goes to the
+        provider-backed owner instead of staying as a login handle on an
+        account that cannot claim it. The move is audited, because the old
+        holder will otherwise just find their address gone.
+        """
+        claimed = squatter.email or ""
+        squatter.email = None
+        squatter.email_verified = False
+        self.session.flush()
+        self.record_event(
+            squatter.id,
+            "email_reclaimed",
+            provider=profile.provider,
+            username=claimed,
+            detail="released to an account whose provider verified it",
+        )
 
     def _refresh_binding(
         self,
@@ -516,6 +597,12 @@ class UserService:
         }
         for key, value in fields.items():
             if key in allowed and value is not None:
+                if key == "email" and value != user.email:
+                    # A changed address is a fresh, unproven claim. Keeping the
+                    # old True would let anyone move a "verified" badge onto a
+                    # stranger's address and then absorb that stranger's OAuth
+                    # login. (email_verified itself is never caller-settable.)
+                    user.email_verified = False
                 setattr(user, key, value)
         self.session.flush()
         return user

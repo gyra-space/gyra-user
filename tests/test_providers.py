@@ -154,6 +154,7 @@ def test_identity_linking_by_unionid(settings):
 
 
 def test_identity_linking_by_email(settings):
+    """A verified provider address merges into a *verified* local account."""
     from gyra_user.db import init_engine, session_scope
     from gyra_user.models import User
     from gyra_user.service import UserService
@@ -163,6 +164,9 @@ def test_identity_linking_by_email(settings):
     with session_scope() as session:
         service = UserService(session, settings)
         local = service.create_local_user("carol", "password123", email="c@example.com")
+        # Merging on an address needs proof from the local side too; the old
+        # test got that for free because nothing marked the address unverified.
+        local.email_verified = True
         local_id = local.id
 
     with session_scope() as session:
@@ -179,3 +183,45 @@ def test_identity_linking_by_email(settings):
         assert created is False
         assert user.id == local_id
         assert session.query(User).count() == 1
+
+
+def test_unverified_local_address_cannot_capture_oauth_login(settings):
+    """The takeover guard.
+
+    Registering someone else's address locally used to be enough to absorb
+    their later OAuth login. An unproven address must not be an anchor, and
+    the provider-backed owner takes the address with them.
+    """
+    from gyra_user.db import init_engine, session_scope
+    from gyra_user.models import User
+    from gyra_user.service import UserService
+
+    init_engine(settings.database_url)
+
+    with session_scope() as session:
+        service = UserService(session, settings)
+        squatter = service.create_local_user(
+            "squatter", "password123", email="victim@example.com"
+        )
+        squatter_id = squatter.id
+
+    with session_scope() as session:
+        service = UserService(session, settings)
+        user, created = service.upsert_from_oauth(
+            OAuthProfile(
+                provider="github",
+                subject="4243",
+                username="victim-gh",
+                email="victim@example.com",
+                email_verified=True,
+            )
+        )
+        assert created is True
+        assert user.id != squatter_id
+        assert user.email == "victim@example.com"
+        assert user.email_verified is True
+        assert session.query(User).count() == 2
+
+        squatter = session.query(User).filter(User.id == squatter_id).one()
+        assert squatter.email is None
+        assert squatter.email_verified is False
