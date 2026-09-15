@@ -15,11 +15,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from gyra_user import deps
+from gyra_user.branding import resolve_with_session
 from gyra_user.config import Settings
 from gyra_user.models import User
 from gyra_user.providers import get_provider
 from gyra_user.providers.base import OAuthError
 from gyra_user.schemas import (
+    BrandingOut,
     LocalLoginRequest,
     LocalRegisterRequest,
     MeResponse,
@@ -89,6 +91,21 @@ def create_auth_router(settings: Optional[Settings] = None) -> APIRouter:
             ProviderOut(id=p.id, type=p.type, label=p.label)
             for p in config.enabled_providers()
         ]
+
+    @router.get("/branding", response_model=BrandingOut)
+    async def branding(
+        app: str = Query("", description="接入应用 id，缺省 default"),
+        lang: str = Query("", description="语言，如 zh / en"),
+        session: Session = Depends(deps.get_db),
+        config: Settings = Depends(cfg),
+    ):
+        """Copy for the hosted pages, resolved for one app + locale.
+
+        Public on purpose — the login page has to render before anyone is
+        authenticated. ``/login`` inlines the same payload, so a visitor who
+        switches language or app gets identical content from either source.
+        """
+        return resolve_with_session(session, config.branding, app_id=app, locale=lang)
 
     # ──────────────────────── authorization code ───────────────────────────
 

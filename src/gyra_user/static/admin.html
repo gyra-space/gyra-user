@@ -96,6 +96,7 @@
   <div class="tabs" role="tablist">
     <button id="tab-users" role="tab" aria-selected="true">用户</button>
     <button id="tab-apps" role="tab" aria-selected="false">接入应用（SSO）</button>
+    <button id="tab-branding" role="tab" aria-selected="false">品牌文案</button>
     <button id="tab-events" role="tab" aria-selected="false">登录日志</button>
   </div>
 
@@ -164,6 +165,61 @@
     </div>
   </div>
 
+  <div id="pane-branding" style="display:none">
+    <div class="card">
+      <h2>品牌文案（登录页左侧）</h2>
+      <div class="hint">
+        保存即生效，刷新登录页就能看到，不用重启服务。这里存的是「覆盖层」，
+        它会盖住 configs/auth.toml 的 [branding]；删掉就回到配置文件 / 内置文案。
+      </div>
+      <div id="branding-alert" class="alert"></div>
+      <div class="grid2">
+        <div class="field">
+          <label for="branding-app">接入应用</label>
+          <input id="branding-app" list="branding-apps" value="default" placeholder="default" />
+          <datalist id="branding-apps"></datalist>
+        </div>
+        <div class="field">
+          <label for="branding-locale">语言</label>
+          <input id="branding-locale" list="branding-locales" value="zh" placeholder="zh" />
+          <datalist id="branding-locales"></datalist>
+        </div>
+      </div>
+      <div class="field">
+        <label for="branding-title">标题</label>
+        <input id="branding-title" placeholder="Gyra 用户中心" />
+      </div>
+      <div class="field">
+        <label for="branding-subtitle">副标题</label>
+        <textarea id="branding-subtitle" placeholder="一句话说清这是什么服务"></textarea>
+      </div>
+      <div class="field">
+        <label for="branding-features">要点（每行一条）</label>
+        <textarea id="branding-features" placeholder="标准 OAuth2 授权码流程&#10;内置 OIDC Provider，一次登录全站通行"></textarea>
+      </div>
+      <div class="field">
+        <label for="branding-slides">轮播屏（每行一屏；填了这里就忽略上面的要点）</label>
+        <textarea id="branding-slides" placeholder="一次登录，全站通行 | 内置 OIDC Provider，接入应用无需各自维护账号体系。| 授权码 + PKCE;Refresh Token 可吊销"></textarea>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="btn-save-branding">保存并生效</button>
+        <button id="btn-read-branding">读取当前</button>
+        <button class="danger" id="btn-delete-branding">删除覆盖</button>
+        <button id="btn-preview-branding">预览解析结果</button>
+      </div>
+      <div id="branding-result"></div>
+    </div>
+
+    <div class="card">
+      <h2>已保存的覆盖</h2>
+      <div class="hint">表格里没有的行，说明它当前用的是 configs/auth.toml 或内置文案。</div>
+      <table>
+        <thead><tr><th>应用</th><th>语言</th><th>标题</th><th>屏数</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="branding-list"></tbody>
+      </table>
+    </div>
+  </div>
+
   <div id="pane-events" style="display:none">
     <div class="card">
       <h2>最近登录日志</h2>
@@ -202,12 +258,13 @@ async function api(path, options = {}) {
 }
 
 function selectTab(name) {
-  ["users", "apps", "events"].forEach((n) => {
+  ["users", "apps", "branding", "events"].forEach((n) => {
     $("tab-" + n).setAttribute("aria-selected", String(n === name));
     $("pane-" + n).style.display = n === name ? "block" : "none";
   });
   if (name === "users") loadUsers();
   if (name === "apps") loadClients();
+  if (name === "branding") loadBranding();
   if (name === "events") loadEvents();
 }
 
@@ -354,6 +411,7 @@ async function loadEvents() {
 
 $("tab-users").onclick = () => selectTab("users");
 $("tab-apps").onclick = () => selectTab("apps");
+$("tab-branding").onclick = () => selectTab("branding");
 $("tab-events").onclick = () => selectTab("events");
 $("btn-search").onclick = loadUsers;
 $("btn-reload").onclick = loadUsers;
@@ -392,6 +450,174 @@ $("link-logout").onclick = async (e) => {
   e.preventDefault();
   await fetch("/api/v1/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
   location.href = "/login";
+};
+
+/* ─────────────────────── 品牌文案（登录页左侧）───────────────────────
+   覆盖层存在数据库里，保存后刷新登录页即生效。
+   slides 的文本格式：每行一屏，「标题 | 副标题 | 要点1;要点2」。        */
+
+function showBrandingAlert(msg, kind = "ok") {
+  const el = $("branding-alert");
+  el.textContent = msg;
+  el.className = "alert " + kind;
+  el.style.display = "block";
+}
+
+function brandingTarget() {
+  return {
+    app: $("branding-app").value.trim() || "default",
+    lang: $("branding-locale").value.trim() || "zh",
+  };
+}
+
+function parseSlides(text) {
+  return text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [title, subtitle, features] = line.split("|").map((s) => (s || "").trim());
+    return {
+      title: title || "",
+      subtitle: subtitle || "",
+      features: (features || "").split(";").map((s) => s.trim()).filter(Boolean),
+    };
+  });
+}
+
+function slidesToText(slides) {
+  return (slides || []).map((s) => {
+    const parts = [s.title, s.subtitle, (s.features || []).join(";")];
+    while (parts.length && !parts[parts.length - 1]) parts.pop();
+    return parts.join(" | ");
+  }).join("\n");
+}
+
+function fillBrandingForm(data) {
+  $("branding-title").value = data.title || "";
+  $("branding-subtitle").value = data.subtitle || "";
+  $("branding-features").value = (data.features || []).join("\n");
+  $("branding-slides").value = slidesToText(data.slides);
+}
+
+async function readCurrentBranding() {
+  const { app, lang } = brandingTarget();
+  const qs = new URLSearchParams({ app, lang });
+  const data = await api(`/admin/branding/resolve?${qs}`);
+  $("branding-app").value = data.app_id;
+  $("branding-locale").value = data.locale;
+  fillBrandingForm(data);
+  return data;
+}
+
+async function loadBranding() {
+  await readCurrentBranding().catch(() => {});
+  const rows = await api("/admin/branding");
+  const apps = new Set(["default"]);
+  const locales = new Set(["zh", "en"]);
+  const tbody = $("branding-list");
+  tbody.innerHTML = "";
+  if (!rows.length) return emptyRow(tbody, "还没有覆盖，全部走配置文件 / 内置文案", 6);
+
+  rows.forEach((row) => {
+    apps.add(row.app_id);
+    locales.add(row.locale);
+    const content = row.payload || {};
+    const tr = document.createElement("tr");
+    [row.app_id, row.locale, content.title || "-"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const slidesTd = document.createElement("td");
+    slidesTd.innerHTML = `<span class="muted">${(content.slides || []).length || 1} 屏</span>`;
+    tr.appendChild(slidesTd);
+    const stateTd = document.createElement("td");
+    stateTd.innerHTML = row.is_active
+      ? '<span class="muted">生效中</span>'
+      : '<span class="muted" style="color:#d4380d">已停用</span>';
+    tr.appendChild(stateTd);
+
+    const actions = document.createElement("td");
+    const wrap = document.createElement("div");
+    wrap.className = "actions";
+    wrap.appendChild(btn("加载到表单", "", () => {
+      $("branding-app").value = row.app_id;
+      $("branding-locale").value = row.locale;
+      fillBrandingForm(content);
+      showBrandingAlert("已载入表单，改完点「保存并生效」", "ok");
+    }));
+    wrap.appendChild(btn("删除", "danger", async () => {
+      if (!confirm(`确认删除 ${row.app_id} / ${row.locale} 的覆盖？`)) return;
+      await api(`/admin/branding/${encodeURIComponent(row.app_id)}/${encodeURIComponent(row.locale)}`, { method: "DELETE" });
+      showBrandingAlert("已删除，登录页回到配置文件 / 内置文案", "ok");
+      loadBranding();
+    }));
+    actions.appendChild(wrap);
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  });
+
+  $("branding-apps").innerHTML = "";
+  apps.forEach((id) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    $("branding-apps").appendChild(opt);
+  });
+  $("branding-locales").innerHTML = "";
+  locales.forEach((code) => {
+    const opt = document.createElement("option");
+    opt.value = code;
+    $("branding-locales").appendChild(opt);
+  });
+  api("/admin/clients?limit=100").then((d) => {
+    d.items.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.client_id;
+      opt.label = c.name;
+      $("branding-apps").appendChild(opt);
+    });
+  }).catch(() => {});
+}
+
+$("btn-read-branding").onclick = () => readCurrentBranding().catch((e) => showBrandingAlert(e.message, "error"));
+
+$("btn-save-branding").onclick = async () => {
+  const { app, lang } = brandingTarget();
+  const content = {
+    title: $("branding-title").value.trim(),
+    subtitle: $("branding-subtitle").value.trim(),
+    features: $("branding-features").value.split("\n").map((s) => s.trim()).filter(Boolean),
+    slides: parseSlides($("branding-slides").value),
+  };
+  if (!content.title && !content.slides.length) {
+    return showBrandingAlert("至少填一个标题或一屏轮播内容", "error");
+  }
+  try {
+    const data = await api(
+      `/admin/branding/${encodeURIComponent(app)}/${encodeURIComponent(lang)}`,
+      { method: "PUT", body: JSON.stringify({ content, is_active: true }) }
+    );
+    showBrandingAlert(`已保存，登录页立刻生效（source=${data.source}，${data.slides.length} 屏）`, "ok");
+    loadBranding();
+  } catch (err) { showBrandingAlert(err.message, "error"); }
+};
+
+$("btn-delete-branding").onclick = async () => {
+  const { app, lang } = brandingTarget();
+  if (!confirm(`确认删除 ${app} / ${lang} 的覆盖？`)) return;
+  try {
+    await api(`/admin/branding/${encodeURIComponent(app)}/${encodeURIComponent(lang)}`, { method: "DELETE" });
+    showBrandingAlert("已删除", "ok");
+    loadBranding();
+  } catch (err) { showBrandingAlert(err.message, "error"); }
+};
+
+$("btn-preview-branding").onclick = async () => {
+  const { app, lang } = brandingTarget();
+  try {
+    const data = await api(`/admin/branding/resolve?${new URLSearchParams({ app, lang })}`);
+    $("branding-result").innerHTML =
+      `<div class="secret">解析来源：${data.source}　应用：${data.app_id}　语言：${data.locale}` +
+      `（可选 ${data.locales.join(" / ")}）　轮播间隔：${data.rotate_interval}s<br>` +
+      `${data.slides.map((s, i) => `${i + 1}. ${s.title}｜${s.subtitle || "-"}｜${(s.features || []).join(" / ") || "-"}`).join("<br>")}</div>`;
+  } catch (err) { showBrandingAlert(err.message, "error"); }
 };
 
 loadUsers();

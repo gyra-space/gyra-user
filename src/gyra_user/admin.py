@@ -8,10 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from gyra_user import deps
+from gyra_user.branding import BrandingStore, resolve_with_session
 from gyra_user.config import Settings
 from gyra_user.models import LoginEvent, User
 from gyra_user.oidc_service import OIDCError, OIDCService
 from gyra_user.schemas import (
+    BrandingOut,
+    BrandingOverrideOut,
+    BrandingUpsertRequest,
     ClientCreateRequest,
     ClientUpdateRequest,
     ResetPasswordRequest,
@@ -249,6 +253,56 @@ def create_admin_router(settings: Optional[Settings] = None) -> APIRouter:
             }
             for e in events
         ]
+
+    # ──────────────────── branding（登录页品牌文案，热更）────────────────────
+
+    @router.get("/branding", dependencies=guard)
+    async def list_branding(
+        session: Session = Depends(deps.get_db),
+        config: Settings = Depends(cfg),
+    ) -> List[BrandingOverrideOut]:
+        """Every saved override. The config file itself is not listed here."""
+        return [BrandingOverrideOut(**row) for row in BrandingStore(session).list_all()]
+
+    @router.get("/branding/resolve", dependencies=guard)
+    async def preview_branding(
+        app: str = Query("", description="接入应用 id"),
+        lang: str = Query("", description="语言"),
+        session: Session = Depends(deps.get_db),
+        config: Settings = Depends(cfg),
+    ) -> BrandingOut:
+        """Exactly what ``/login?app=&lang=`` would render right now."""
+        return resolve_with_session(session, config.branding, app_id=app, locale=lang)
+
+    @router.put("/branding/{app_id}/{locale}", dependencies=guard)
+    async def upsert_branding(
+        app_id: str,
+        locale: str,
+        body: BrandingUpsertRequest,
+        session: Session = Depends(deps.get_db),
+        config: Settings = Depends(cfg),
+    ) -> BrandingOut:
+        """Save an override. Takes effect on the next page load — no restart."""
+        BrandingStore(session).upsert(
+            app_id, locale, body.content, is_active=body.is_active
+        )
+        session.commit()
+        return resolve_with_session(
+            session, config.branding, app_id=app_id, locale=locale
+        )
+
+    @router.delete("/branding/{app_id}/{locale}", dependencies=guard)
+    async def delete_branding(
+        app_id: str,
+        locale: str,
+        session: Session = Depends(deps.get_db),
+        config: Settings = Depends(cfg),
+    ):
+        """Drop the override so the config file / built-in copy shows again."""
+        if not BrandingStore(session).delete(app_id, locale):
+            raise HTTPException(status_code=404, detail="Override not found")
+        session.commit()
+        return {"success": True}
 
     return router
 

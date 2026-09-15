@@ -152,7 +152,7 @@ cookie_samesite = "lax"     # 跨站跳转场景需要 "none"，且必须 https
 
 ```
 src/gyra_user/
-├── config.py      三层配置（默认值 < auth.toml < GYRA_USER_* 环境变量）
+├── config.py      四层配置（默认值 < auth.toml < auth.local.toml < GYRA_USER_* 环境变量）
 ├── db.py          SQLAlchemy engine/session，SQLite 开 WAL + 外键
 ├── models.py      User / OAuthAccount / RefreshToken / LoginEvent
 │                  OAuthClient / AuthorizationCode / UserConsent
@@ -183,7 +183,7 @@ src/gyra_user/
 .
 ├── pyproject.toml      uv 工程（依赖、ruff、pytest 配置都在这）
 ├── uv.lock             锁定 48 个包，CI/生产用 uv sync --frozen
-├── .python-version     3.13
+├── .python-version     3.12
 ├── alembic.ini
 ├── migrations/         Alembic 版本化迁移（SQLite 用 batch 模式）
 ├── Dockerfile          多阶段构建，非 root，带 HEALTHCHECK
@@ -196,7 +196,7 @@ src/gyra_user/
 `src/gyra_user/`：
 
 ```
-├── config.py        三层配置（默认值 < auth.toml < GYRA_USER_* 环境变量）
+├── config.py        四层配置（默认值 < auth.toml < auth.local.toml < GYRA_USER_* 环境变量）
 ├── db.py            SQLAlchemy engine/session，SQLite 开 WAL + 外键 + busy_timeout
 ├── migrate.py       补齐历史库漂移 + 调 Alembic
 ├── models.py        User / OAuthAccount / RefreshToken / LoginEvent
@@ -279,7 +279,9 @@ src/gyra_user/
 ## 接入 GitHub
 
 1. <https://github.com/settings/developers> → New OAuth App
-2. **Authorization callback URL** 填 `http://localhost:8100/api/v1/auth/oauth/callback`
+2. **Authorization callback URL** 填 `{public_base_url}/api/v1/auth/oauth/callback`，
+   本地是 `http://localhost:8100/api/v1/auth/oauth/callback`，
+   线上是 `https://user.gyra.chat/api/v1/auth/oauth/callback`（必须和实际访问地址完全一致）
 3. 填到 `.env`：
 
 ```bash
@@ -290,7 +292,8 @@ GYRA_USER_GITHUB_CLIENT_SECRET=xxxxxxxx
 ## 接入微信（开放平台网站应用）
 
 1. <https://open.weixin.qq.com> → 管理中心 → 网站应用（**需企业认证**，个人主体开不了）
-2. **授权回调域** 填 `localhost`（**不要带 `http://`、不要带路径**，这是最常见的踩坑点）
+2. **授权回调域** 填域名（**不要带 `http://`、不要带路径**，这是最常见的踩坑点）：
+   本地 `localhost`，线上 `user.gyra.chat`
 3. 填到 `.env`：
 
 ```bash
@@ -391,7 +394,7 @@ async def something(user: User = Depends(get_current_active_user)):
 
 ### 项目形态
 
-标准 **uv 工程**：`pyproject.toml` + `uv.lock` + `.python-version`（3.13），`.venv` 由 uv 托管。
+标准 **uv 工程**：`pyproject.toml` + `uv.lock` + `.python-version`（3.12），`.venv` 由 uv 托管。
 不要再用 pip 直接装依赖。
 
 ```bash
@@ -488,14 +491,84 @@ SQLite + 多 worker 有两个坑，代码里都处理了：
 
 ## 配置
 
-优先级：**默认值 < `configs/auth.toml` < `GYRA_USER_*` 环境变量**。
-所有字段见 [`configs/auth.toml`](configs/auth.toml) 里的注释。
+优先级：**默认值 < `configs/auth.toml` < `configs/auth.local.toml` < `GYRA_USER_*` 环境变量**。
+所有字段见 [`configs/auth.toml`](configs/auth.toml) 里的注释，环境变量清单见
+[`.env.example`](.env.example)。
 
-几个要注意的：
+- `configs/auth.local.toml` 已被 gitignore，用来放密钥和本机覆盖。复制
+  [`configs/auth.local.toml.example`](configs/auth.local.toml.example)，**只写要覆盖的键即可**：
+  `[[providers]]` 按 `id` 合并字段，给 GitHub 补密钥不用把整段抄一遍。
+- **第三方登录入口只在凭据齐全时出现**：`client_id` 为空 = 该 provider 未启用，
+  登录页对应的按钮整块隐藏（不是报错），`/api/v1/auth/oauth/status` 会如实反映。
 
+  登录页只显示「账号密码」、GitHub / 微信 不出现时，按这个顺序查：
+
+  ```bash
+  # 1. 服务端到底广告了哪些登录方式？只有 local 就是没配到凭据。
+  curl -s https://<你的域名>/api/v1/auth/oauth/status
+  #    {"enabled":true,"providers":[{"id":"local",...}]}   <- 缺 github / wechat
+
+  # 2. 凭据在生效位置吗？三种写法都可以，但都要能落到进程环境或 .env：
+  #    configs/auth.local.toml 的 [[providers]] / GYRA_USER_* 环境变量 / .env
+  #    改了必须重启服务（配置只在启动时读一次）
+
+  # 3. 直接问配置：能打印出 enabled=True 就说明读到了
+  python -c "from gyra_user.config import load_settings as L; \
+             print([(p.id,p.enabled) for p in L().providers])"
+  ```
+
+  两个容易踩的点：`.env` 里的 provider 凭据过去会被静默忽略（已在 `config.py`
+  的 `env_lookup()` 修掉，真实环境变量仍优先）；凭据从 TOML 里删掉后仅靠环境变量
+  提供的，现在会自动补回 shipped 定义，不再静默丢失。
 - `GYRA_USER_JWT_SECRET` 生产环境必须配，否则会在 `data/.jwt_secret` 生成随机密钥（多副本会互相验签失败）
 - 服务在反代后面时配 `GYRA_USER_PUBLIC_BASE_URL`，否则 `redirect_uri` 会算成内网地址
 - `require_approval = true` 开启「注册需管理员审核」
+
+### 邮箱作为身份锚点（账号绑定）
+
+`link_by_email` 在 OAuth 首次登录时把新身份并进已有账号。为了防止「先抢注别人
+邮箱、再等对方登录」这种吞号，**双方都验证过**邮箱才允许合并：
+
+| 场景 | 结果 |
+|---|---|
+| provider 声明已验证 + 已有账号已验证 | 合并（正常的绑定） |
+| provider 未声明验证 | 拒绝合并，记 `link_refused`，新账号不带该邮箱 |
+| provider 已验证 + 已有账号**未**验证 | 不合并；邮箱**交还给邮箱主人**，记 `email_reclaimed` |
+| 改邮箱（自助/后台） | `email_verified` 自动重置为 `False` |
+
+- 本地注册的邮箱**永远是未验证**的——没接邮箱验证通道之前，它只是「暂借」，
+  不能作为锚点。接上验证通道后再把它置 `True`。
+- `reclaim_unverified_email = false` 时改为「两边都不给」：新账号邮箱留空，
+  原账号保留。`link_by_email_requires_verified = false` 是退回旧行为的逃生阀，
+  **生产不要关**。
+
+---
+
+## 登录页文案（品牌）
+
+`/login` 左侧那块**不是写死的**，按 `(接入应用, 语言)` 解析后由服务端内联进页面：
+
+```
+app + locale → app + 默认语言 → default + locale → default + 默认语言 → 内置文案
+```
+
+三个来源，优先级从高到低：
+
+| 来源 | 改哪里 | 生效方式 |
+|---|---|---|
+| 后台覆盖 | `/admin` →「品牌文案」 | 保存后刷新登录页即生效，**不用重启** |
+| 配置文件 | `configs/auth.toml` 的 `[branding]` | 重启 |
+| 内置文案 | [`gyra_user/branding.py`](src/gyra_user/branding.py) | — |
+
+- **多屏轮播**：`slides` 写多条就是多屏，`rotate_interval` 控制间隔（0 = 不轮播，页面出现指示点）
+- **多语言**：`locales` 列出可切换的语言，页面右上出现语言切换；按钮/提示等界面文案也在同一份数据里
+  （`ui` 键，对应 HTML 上的 `data-i18n`），**加一门语言只需要加数据**
+- **按接入应用**：`?app=<client_id>` 换一套文案与主题色（`[branding.theme]`）
+- **接口**：`GET /api/v1/auth/branding?app=&lang=`（公开，登录页也用它做语言切换），
+  后台预览用 `GET /api/v1/admin/branding/resolve?app=&lang=`
+
+页面里带 `data-i18n` 的元素由 `ui` 填充；只有 JS 完全不可用时才会退回到 HTML 里那一屏静态兜底。
+
 
 ---
 

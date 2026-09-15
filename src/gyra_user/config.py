@@ -1,10 +1,17 @@
 """Configuration for the Gyra user center.
 
-Three ways to configure, later wins:
+Four layers, later wins:
 
 1. defaults in :class:`Settings`
-2. a TOML file (``$GYRA_USER_CONFIG``, ``./configs/auth.toml`` or ``./auth.toml``)
-3. ``GYRA_USER_*`` environment variables
+2. a base TOML file (``$GYRA_USER_CONFIG``, ``./configs/auth.toml`` or
+   ``./auth.toml``)
+3. a local TOML file merged on top (``./configs/auth.local.toml`` or
+   ``./auth.local.toml``), git-ignored, for credentials and copy you keep off
+   the repository
+4. ``GYRA_USER_*`` environment variables
+
+(explicit ``overrides`` passed to :func:`load_settings` beat all four; the
+ordering of 2-4 is enforced by :meth:`Settings.settings_customise_sources`.)
 """
 
 from __future__ import annotations
@@ -16,13 +23,35 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from gyra_user.branding import Branding
+
 ENV_PREFIX = "GYRA_USER_"
 
+# Base config — the first file that exists wins.
 DEFAULT_CONFIG_LOCATIONS = (
     "configs/auth.toml",
     "auth.toml",
     "configs/gyra-user.toml",
 )
+
+# Merged on top of the base, in order, when present. .gitignore keeps these
+# out of the repository.
+LOCAL_CONFIG_LOCATIONS = (
+    "configs/auth.local.toml",
+    "auth.local.toml",
+)
+
+
+def _deep_merge(base: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge ``new`` into ``base``; lists and scalars replace."""
+    merged = dict(base)
+    for key, value in new.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _load_toml_text(path: Path) -> Dict[str, Any]:
@@ -49,6 +78,52 @@ def find_config_file(explicit: Optional[str] = None) -> Optional[Path]:
         if candidate.is_file():
             return candidate
     return None
+
+
+def config_files(explicit: Optional[str] = None) -> List[Path]:
+    """Every config file to read, in merge order (later overrides earlier).
+
+    The base is whichever of ``$GYRA_USER_CONFIG`` / ``configs/auth.toml`` /
+    ``auth.toml`` exists first; the git-ignored ``*.local.toml`` overlay is
+    appended on top either way, so pointing ``GYRA_USER_CONFIG`` at a shared
+    file does not silently disable a developer's local overrides.
+    """
+    cwd = Path.cwd()
+    if explicit:
+        base = [Path(explicit).expanduser()]
+    else:
+        env_path = os.environ.get(f"{ENV_PREFIX}CONFIG")
+        if env_path:
+            base = [Path(env_path).expanduser()]
+        else:
+            candidates = [cwd / name for name in DEFAULT_CONFIG_LOCATIONS]
+            base = [p for p in candidates if p.is_file()][:1]
+    local = [p for p in (cwd / n for n in LOCAL_CONFIG_LOCATIONS) if p.is_file()]
+    return base + local
+
+
+def env_lookup() -> Dict[str, str]:
+    """Environment values for the provider shortcuts: ``.env`` overlaid by the
+    real environment.
+
+    ``Settings`` reads ``.env`` through pydantic-settings, but the provider
+    shortcuts below look names up by hand — so without this, credentials placed
+    in ``.env`` (and *only* there) were silently dropped: every other setting
+    worked, the login page just never grew its GitHub / WeChat buttons.
+    Real environment variables win, matching the precedence in
+    :meth:`Settings.settings_customise_sources`.
+    """
+    values: Dict[str, str] = {}
+    try:
+        from dotenv import dotenv_values
+    except ModuleNotFoundError:  # pragma: no cover - pydantic-settings pulls it in
+        dotenv_values = None  # type: ignore[assignment]
+    if dotenv_values is not None:
+        for name, value in dotenv_values(".env").items():
+            if value is not None and value != "":
+                values[name] = value
+    values.update(os.environ)
+    return values
 
 
 # Environment shortcuts that patch a provider matched by its ``type``.
@@ -95,6 +170,10 @@ class ProviderConfig(BaseModel):
     username_path: str = "login"
     name_path: str = "name"
     email_path: str = "email"
+    # Dot path of the "this address is verified" claim. A provider that does
+    # not assert verification leaves this absent, and the address is then
+    # treated as unverified — unverified addresses are not identity anchors.
+    email_verified_path: str = "email_verified"
     avatar_path: str = "avatar_url"
 
     # Provider is usable only when credentials are present.
@@ -132,6 +211,25 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type,
+        init_settings: Any,
+        env_settings: Any,
+        dotenv_settings: Any,
+        file_secret_settings: Any,
+    ):
+        """Put ``GYRA_USER_*`` above the TOML file.
+
+        The TOML file arrives as ``init`` kwargs, and ``init`` outranks ``env``
+        by default — so a key present in the file could never be overridden
+        from the environment, the exact opposite of what the config file
+        promises (and what a container needs). Explicit ``overrides`` are
+        applied by :func:`load_settings` after this, so they still win.
+        """
+        return (env_settings, dotenv_settings, init_settings, file_secret_settings)
 
     # ── service ────────────────────────────────────────────────────────────
     app_name: str = "Gyra User Center"
@@ -183,6 +281,16 @@ class Settings(BaseSettings):
     # ── behaviour ──────────────────────────────────────────────────────────
     # Link a new OAuth identity onto an existing account with the same email.
     link_by_email: bool = True
+    # An email may only merge two identities when *both* sides proved they own
+    # it. Turning this off restores the old behaviour, where a local account
+    # that merely typed an address in could absorb the real owner's OAuth
+    # login — see UserService._link_target_by_email.
+    link_by_email_requires_verified: bool = True
+    # When a provider proves an address belongs to the logging-in identity but
+    # an unverified account is squatting on it, hand the address to its real
+    # owner. Off -> the address is left with neither, rather than being kept as
+    # a login handle on an account that never proved it owned one.
+    reclaim_unverified_email: bool = True
     # Always require authentication (when false, /me returns an anonymous user).
     auth_required: bool = True
     sso_auto_login_provider: str = ""
@@ -201,6 +309,11 @@ class Settings(BaseSettings):
     providers: List[ProviderConfig] = Field(
         default_factory=lambda: [ProviderConfig(**item) for item in DEFAULT_PROVIDERS]
     )
+
+    # ── branding ───────────────────────────────────────────────────────────
+    # Left-panel copy of the hosted pages. Overridable per app and per locale,
+    # and hot-editable from /admin; see gyra_user.branding.
+    branding: Branding = Field(default_factory=Branding)
 
     # ── misc ───────────────────────────────────────────────────────────────
     debug: bool = False
@@ -272,21 +385,42 @@ def load_settings(
     config_file: Optional[str] = None,
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Settings:
-    """Build settings from TOML file + environment + explicit overrides."""
+    """Build settings from TOML files + environment + explicit overrides."""
 
     data: Dict[str, Any] = {}
-    path = find_config_file(config_file)
-    if path is not None:
+    provider_items: Dict[str, Dict[str, Any]] = {}
+    for path in config_files(config_file):
         raw = _load_toml_text(path)
-        data.update({k: v for k, v in raw.items() if k != "providers"})
-        if isinstance(raw.get("providers"), list):
-            data["providers"] = [ProviderConfig(**item) for item in raw["providers"]]
+        for key, value in raw.items():
+            if key == "providers":
+                if not isinstance(value, list):
+                    continue
+                # Providers merge by id, so a local file can add credentials
+                # to a provider the committed file already declares.
+                for item in value:
+                    if not isinstance(item, dict):
+                        continue
+                    item_id = str(item.get("id") or item.get("type") or "")
+                    provider_items[item_id] = _deep_merge(
+                        provider_items.get(item_id, {}), item
+                    )
+                continue
+            current = data.get(key)
+            if isinstance(current, dict) and isinstance(value, dict):
+                data[key] = _deep_merge(current, value)
+            else:
+                data[key] = value
+
+    if provider_items:
+        data["providers"] = [ProviderConfig(**item) for item in provider_items.values()]
 
     # Env shortcuts patch provider credentials by provider type.
+    env = env_lookup()
+    defaults_by_type = {str(item["type"]): item for item in DEFAULT_PROVIDERS}
     for ptype, mapping in _PROVIDER_ENV_SHORTCUTS.items():
         patched: Dict[str, str] = {}
         for field_name, env_name in mapping.items():
-            value = os.environ.get(env_name)
+            value = env.get(env_name)
             if value:
                 patched[field_name] = value
         if not patched:
@@ -300,16 +434,21 @@ def load_settings(
                 for field_name, value in patched.items():
                     setattr(provider, field_name, value)
                 found = True
-        if not found and ptype == "wechat_open":
-            patched.setdefault("id", "wechat")
+        if not found and ptype in defaults_by_type:
+            # Credentials were supplied for a provider the config file no
+            # longer declares — reinstate the shipped definition rather than
+            # dropping the credentials on the floor.
+            patched.setdefault("id", str(defaults_by_type[ptype]["id"]))
             patched["type"] = ptype
-            providers.append(ProviderConfig(**patched))
+            providers.append(ProviderConfig(**{**defaults_by_type[ptype], **patched}))
         data["providers"] = providers
 
-    if overrides:
-        data.update(overrides)
-
     settings = Settings(**data)
+
+    if overrides:
+        # Explicit overrides beat everything, including the environment.
+        settings = settings.model_copy(update=overrides)
+
     if not settings.data_dir:
         settings.data_dir = "data"
     return settings
@@ -319,6 +458,8 @@ __all__ = [
     "ENV_PREFIX",
     "ProviderConfig",
     "Settings",
+    "config_files",
+    "env_lookup",
     "find_config_file",
     "load_settings",
 ]

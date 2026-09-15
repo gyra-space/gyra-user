@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>登录 · Gyra 用户中心</title>
+<!-- 服务端把解析好的品牌文案注入到这里（见 gyra_user/app.py 的 _inline_json）。
+     同步可得，所以首屏不会先闪一版兜底文案。 -->
+<script id="branding-bootstrap" type="application/json">/*__BRANDING_JSON__*/</script>
 <style>
   :root {
     --bg: #f4f5f7;
@@ -22,11 +25,30 @@
     display: flex; align-items: center; justify-content: center; padding: 24px;
   }
   .shell { display: flex; gap: 56px; align-items: center; max-width: 900px; width: 100%; }
-  .brand { flex: 1; }
+
+  /* ── 左侧品牌区：内容全部来自 branding，不在这里写死 ── */
+  .brand { flex: 1; min-width: 0; }
+  .slide { display: none; }
+  .slide.on { display: block; animation: slide-in .4s ease both; }
+  @keyframes slide-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .slide.on { animation: none; } }
   .brand h1 { font-size: 30px; margin: 0 0 12px; letter-spacing: -.4px; }
   .brand p { color: var(--muted); line-height: 1.7; margin: 0 0 24px; font-size: 14px; }
   .feature { display: flex; gap: 10px; margin-bottom: 14px; font-size: 14px; }
   .feature .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); margin-top: 8px; flex: none; }
+  .dots { display: flex; gap: 6px; margin-top: 24px; }
+  .dots button {
+    width: 7px; height: 7px; padding: 0; border: 0; border-radius: 4px;
+    background: #d3d6de; cursor: pointer; transition: width .2s ease, background .2s ease;
+  }
+  .dots button[aria-current="true"] { width: 18px; background: var(--primary); }
+  .langs { display: flex; gap: 8px; margin-top: 18px; }
+  .langs button {
+    border: 1px solid var(--border); background: #fff; color: var(--muted);
+    border-radius: 999px; padding: 3px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .langs button[aria-current="true"] { color: var(--primary); border-color: var(--primary); }
+
   .card {
     width: 380px; flex: none; background: var(--card); border: 1px solid var(--border);
     border-radius: 14px; padding: 30px 28px; box-shadow: 0 10px 40px rgba(31,35,41,.06);
@@ -77,65 +99,74 @@
 <body>
 <div class="shell">
   <div class="brand">
-    <h1>Gyra 用户中心</h1>
-    <p>统一的 OAuth2 / OIDC 认证服务。支持 GitHub、微信开放平台扫码登录与本地账号，
-       数据落在 SQLite，可作为独立服务运行，也可以一行代码挂载进 Gyra。</p>
-    <div class="feature"><span class="dot"></span><span>标准 OAuth2 授权码流程，state + PKCE 防 CSRF</span></div>
-    <div class="feature"><span class="dot"></span><span>JWT Access Token + 可轮换 / 可吊销 Refresh Token</span></div>
-    <div class="feature"><span class="dot"></span><span>内置 OIDC Provider，一次登录全站通行（单点登录）</span></div>
-    <div class="feature"><span class="dot"></span><span>微信 unionid 打通公众号与网站应用，同人同账号</span></div>
-    <div class="feature"><span class="dot"></span><span>兼容 Gyra 现有 <code>/api/v1/auth/*</code> 契约，前端零改动</span></div>
+    <!-- 兜底：branding 拿不到时（禁用 JS / 直接 file:// 打开）显示这一屏。
+         真正要改文案请改 configs/auth.toml 的 [branding]，或用 /admin 的
+         「品牌文案」热更 —— 不要改这里的静态结构。 -->
+    <div id="slides">
+      <section class="slide on">
+        <h1>Gyra 用户中心</h1>
+        <p>统一的 OAuth2 / OIDC 认证服务。支持 GitHub、微信开放平台扫码登录与本地账号，
+           数据落在 SQLite，可作为独立服务运行，也可以一行代码挂载进 Gyra。</p>
+        <div class="feature"><span class="dot"></span><span>标准 OAuth2 授权码流程，state + PKCE 防 CSRF</span></div>
+        <div class="feature"><span class="dot"></span><span>JWT Access Token + 可轮换 / 可吊销 Refresh Token</span></div>
+        <div class="feature"><span class="dot"></span><span>内置 OIDC Provider，一次登录全站通行（单点登录）</span></div>
+        <div class="feature"><span class="dot"></span><span>微信 unionid 打通公众号与网站应用，同人同账号</span></div>
+        <div class="feature"><span class="dot"></span><span>兼容 Gyra 现有 /api/v1/auth/* 契约，前端零改动</span></div>
+      </section>
+    </div>
+    <div class="dots" id="dots"></div>
+    <div class="langs" id="langs"></div>
   </div>
 
   <div class="card">
     <div id="panel-auth">
-      <h2>登录</h2>
-      <div class="sub" id="sub">选择一种方式继续</div>
+      <h2 data-i18n="login">登录</h2>
+      <div class="sub" id="sub" data-i18n="subtitle_pick">选择一种方式继续</div>
       <div id="alert" class="alert"></div>
 
-      <div class="tabs" role="tablist">
-        <button id="tab-oauth" role="tab" aria-selected="true">第三方登录</button>
-        <button id="tab-local" role="tab" aria-selected="false">账号密码</button>
+      <div class="tabs" id="tabs" role="tablist">
+        <button id="tab-oauth" role="tab" aria-selected="true" data-i18n="tab_third_party">第三方登录</button>
+        <button id="tab-local" role="tab" aria-selected="false" data-i18n="tab_password">账号密码</button>
       </div>
 
       <div id="pane-oauth">
         <div id="providers"></div>
-        <div class="divider">或</div>
-        <button class="btn" id="btn-wechat-qr">微信扫码登录</button>
+        <div class="divider" id="divider-oauth" data-i18n="or">或</div>
+        <button class="btn" id="btn-wechat-qr" data-i18n="wechat_qr">微信扫码登录</button>
         <div id="qr-box" class="qr" style="display:none"></div>
       </div>
 
       <div id="pane-local" style="display:none">
-        <label for="username">用户名</label>
-        <input id="username" autocomplete="username" placeholder="用户名或邮箱" />
+        <label for="username" data-i18n="username">用户名</label>
+        <input id="username" autocomplete="username" data-i18n-placeholder="username_placeholder" placeholder="用户名或邮箱" />
 
         <div id="field-email" style="display:none">
-          <label for="email">邮箱</label>
+          <label for="email" data-i18n="email">邮箱</label>
           <input id="email" type="email" autocomplete="email" placeholder="you@example.com" />
         </div>
 
         <div id="field-fullname" style="display:none">
-          <label for="fullname">昵称</label>
-          <input id="fullname" autocomplete="nickname" placeholder="选填" />
+          <label for="fullname" data-i18n="fullname">昵称</label>
+          <input id="fullname" autocomplete="nickname" data-i18n-placeholder="fullname_placeholder" placeholder="选填" />
         </div>
 
-        <label for="password">密码</label>
-        <input id="password" type="password" autocomplete="current-password" placeholder="至少 6 位" />
+        <label for="password" data-i18n="password">密码</label>
+        <input id="password" type="password" autocomplete="current-password" data-i18n-placeholder="password_placeholder" placeholder="至少 6 位" />
 
         <div id="field-confirm" style="display:none">
-          <label for="confirm">确认密码</label>
-          <input id="confirm" type="password" autocomplete="new-password" placeholder="再输入一次" />
+          <label for="confirm" data-i18n="confirm">确认密码</label>
+          <input id="confirm" type="password" autocomplete="new-password" data-i18n-placeholder="confirm_placeholder" placeholder="再输入一次" />
         </div>
 
         <div id="field-agree" class="agree" style="display:none">
           <input id="agree" type="checkbox" />
-          <label for="agree" style="margin:0">我已阅读并同意服务条款与隐私政策</label>
+          <label for="agree" style="margin:0" data-i18n="agree">我已阅读并同意服务条款与隐私政策</label>
         </div>
 
-        <button class="btn primary" id="btn-login">登录</button>
+        <button class="btn primary" id="btn-login" data-i18n="login">登录</button>
         <div class="row">
-          <span class="link" id="link-register">注册新账号</span>
-          <span class="link" id="link-back" style="display:none">返回登录</span>
+          <span class="link" id="link-register" data-i18n="register_link">注册新账号</span>
+          <span class="link" id="link-back" style="display:none" data-i18n="back">返回登录</span>
         </div>
       </div>
     </div>
@@ -144,12 +175,12 @@
       <img id="me-avatar" alt="" />
       <h3 id="me-name"></h3>
       <div class="meta" id="me-meta"></div>
-      <button class="btn primary" id="btn-continue" style="display:none">继续</button>
-      <button class="btn primary" id="btn-logout">退出登录</button>
+      <button class="btn primary" id="btn-continue" style="display:none" data-i18n="continue">继续</button>
+      <button class="btn primary" id="btn-logout" data-i18n="logout">退出登录</button>
       <div class="links">
-        <a class="link" href="/account">个人中心</a>
-        <a class="link" href="/admin">管理后台</a>
-        <a class="link" href="/docs">API 文档</a>
+        <a class="link" href="/account" data-i18n="account">个人中心</a>
+        <a class="link" href="/admin" data-i18n="admin">管理后台</a>
+        <a class="link" href="/docs" data-i18n="api_docs">API 文档</a>
       </div>
     </div>
   </div>
@@ -192,12 +223,189 @@ async function api(path, options = {}) {
   return data;
 }
 
+/* ─────────────────────────── 品牌文案 ───────────────────────────
+   BRANDING 正常情况下由服务端内联（id="branding-bootstrap"），
+   语言切换 / 接入应用切换时再问 /branding 要一份新的。            */
+
+let BRANDING = readBootstrap();
+let slideIndex = 0;
+let rotateTimer = null;
+
+function readBootstrap() {
+  const el = $("branding-bootstrap");
+  if (!el) return null;
+  try {
+    const data = JSON.parse(el.textContent.trim());
+    return data && data.slides ? data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function t(key) {
+  return (BRANDING && BRANDING.ui && BRANDING.ui[key]) || "";
+}
+
+function applyText() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const value = t(el.getAttribute("data-i18n"));
+    if (value) el.textContent = value;
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const value = t(el.getAttribute("data-i18n-placeholder"));
+    if (value) el.placeholder = value;
+  });
+  $("sub").textContent = registerMode ? t("subtitle_register") : t("subtitle_pick");
+  $("btn-login").textContent = registerMode ? t("register") : t("login");
+  $("link-register").textContent = registerMode ? t("back_login") : t("register_link");
+}
+
+function applyBranding(data) {
+  if (!data) return;
+  BRANDING = data;
+  const theme = data.theme || {};
+  const root = document.documentElement;
+  if (theme.primary) root.style.setProperty("--primary", theme.primary);
+  if (theme.primary_hover) root.style.setProperty("--primary-hover", theme.primary_hover);
+  if (data.locale) root.lang = data.locale;
+  document.title = `${t("login") || "登录"} · ${data.app_name || "Gyra"}`;
+  renderSlides(data.slides || []);
+  renderLocales(data.locales || [], data.locale);
+  applyText();
+}
+
+function renderSlides(slides) {
+  const box = $("slides");
+  if (!slides.length) return; // 保留静态兜底
+  box.innerHTML = "";
+  slides.forEach((slide, index) => {
+    const section = document.createElement("section");
+    section.className = "slide" + (index === 0 ? " on" : "");
+    const title = document.createElement("h1");
+    title.textContent = slide.title || "";
+    section.appendChild(title);
+    if (slide.subtitle) {
+      const p = document.createElement("p");
+      p.textContent = slide.subtitle;
+      section.appendChild(p);
+    }
+    (slide.features || []).forEach((text) => {
+      const row = document.createElement("div");
+      row.className = "feature";
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      const span = document.createElement("span");
+      span.textContent = text;
+      row.append(dot, span);
+      section.appendChild(row);
+    });
+    box.appendChild(section);
+  });
+  slideIndex = 0;
+  renderDots(slides.length);
+  startRotation(slides.length);
+}
+
+function renderDots(count) {
+  const box = $("dots");
+  box.innerHTML = "";
+  if (count < 2) return;
+  for (let i = 0; i < count; i++) {
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.setAttribute("aria-label", String(i + 1));
+    dot.setAttribute("aria-current", String(i === slideIndex));
+    dot.onclick = () => showSlide(i, true);
+    box.appendChild(dot);
+  }
+}
+
+function showSlide(index, userClicked) {
+  const slides = document.querySelectorAll("#slides .slide");
+  if (!slides.length) return;
+  slideIndex = (index + slides.length) % slides.length;
+  slides.forEach((node, i) => node.classList.toggle("on", i === slideIndex));
+  $("dots").querySelectorAll("button").forEach((dot, i) => {
+    dot.setAttribute("aria-current", String(i === slideIndex));
+  });
+  if (userClicked) restartRotation();
+}
+
+function stopRotation() {
+  if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null; }
+}
+
+function startRotation(count) {
+  stopRotation();
+  const seconds = Number(BRANDING && BRANDING.rotate_interval) || 0;
+  if (seconds <= 0 || count < 2) return;
+  rotateTimer = setInterval(() => showSlide(slideIndex + 1), seconds * 1000);
+}
+
+function restartRotation() {
+  startRotation(document.querySelectorAll("#slides .slide").length);
+}
+
+// 后台标签页不轮播，切回来再继续
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopRotation();
+  else if (!rotateTimer) restartRotation();
+});
+
+function localeLabel(code) {
+  return code === "zh" ? "中文" : code.toUpperCase();
+}
+
+function renderLocales(locales, current) {
+  const box = $("langs");
+  box.innerHTML = "";
+  if (!locales || locales.length < 2) return;
+  locales.forEach((code) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = localeLabel(code);
+    button.setAttribute("aria-current", String(code === current));
+    button.onclick = () => switchLocale(code);
+    box.appendChild(button);
+  });
+}
+
+async function switchLocale(code) {
+  if (BRANDING && BRANDING.locale === code) return;
+  const qs = new URLSearchParams();
+  const appId = params.get("app");
+  if (appId) qs.set("app", appId);
+  qs.set("lang", code);
+  const data = await api("/branding?" + qs).catch(() => null);
+  if (!data) return;
+  applyBranding(data);
+  const url = new URL(location.href);
+  url.searchParams.set("lang", code);
+  history.replaceState(null, "", url);
+}
+
+async function initBranding() {
+  if (BRANDING) { applyBranding(BRANDING); return; }
+  const qs = new URLSearchParams();
+  const appId = params.get("app");
+  const lang = params.get("lang");
+  if (appId) qs.set("app", appId);
+  if (lang) qs.set("lang", lang);
+  const data = await api("/branding" + (qs.toString() ? "?" + qs : "")).catch(() => null);
+  if (data) applyBranding(data);
+}
+
+/* ─────────────────────────── 登录方式 ─────────────────────────── */
+
 async function loadStatus() {
   const status = await api("/oauth/status").catch(() => ({ enabled: false, providers: [] }));
   providers = status.providers || [];
   const box = $("providers");
   box.innerHTML = "";
-  providers.filter((p) => p.type !== "local").forEach((p) => {
+  // wechat_open 走下面的「扫码登录」入口，这里排除掉，
+  // 否则同一个微信会出现两个按钮。
+  const buttons = providers.filter((p) => p.type !== "local" && p.type !== "wechat_open");
+  buttons.forEach((p) => {
     const btn = document.createElement("button");
     btn.className = "btn";
     btn.textContent = p.label || p.id;
@@ -208,12 +416,17 @@ async function loadStatus() {
     };
     box.appendChild(btn);
   });
+
   const hasWechat = providers.some((p) => p.type === "wechat_open");
   $("btn-wechat-qr").style.display = hasWechat ? "flex" : "none";
-  const hasOAuth = providers.filter((p) => p.type !== "local").length > 0;
+  $("divider-oauth").style.display = buttons.length && hasWechat ? "flex" : "none";
+
+  const hasOAuth = buttons.length > 0 || hasWechat;
+  const hasLocal = providers.some((p) => p.type === "local");
   $("pane-oauth").style.display = hasOAuth ? "block" : "none";
-  $("tab-oauth").style.display = hasOAuth ? "block" : "none";
-  if (!hasOAuth) selectTab("local");
+  // 只剩一种登录方式时，整条 tab 栏是多余的，藏掉
+  $("tabs").style.display = hasOAuth && hasLocal ? "flex" : "none";
+  selectTab(hasOAuth ? "oauth" : "local");
 }
 
 function selectTab(name) {
@@ -227,35 +440,33 @@ function selectTab(name) {
 let registerMode = false;
 function toggleRegister() {
   registerMode = !registerMode;
-  $("sub").textContent = registerMode ? "创建新账号" : "选择一种方式继续";
-  $("btn-login").textContent = registerMode ? "注册" : "登录";
-  $("link-register").textContent = registerMode ? "已有账号？去登录" : "注册新账号";
   $("link-back").style.display = registerMode ? "inline" : "none";
   $("password").autocomplete = registerMode ? "new-password" : "current-password";
   ["field-email", "field-fullname", "field-confirm", "field-agree"].forEach((id) => {
     $(id).style.display = registerMode ? "block" : "none";
   });
+  applyText();
 }
 
 async function submitLocal() {
   hideAlert();
   const username = $("username").value.trim();
   const password = $("password").value;
-  if (!username || !password) return showAlert("请输入用户名和密码");
+  if (!username || !password) return showAlert(t("err_required") || "请输入用户名和密码");
 
   if (registerMode) {
     const email = $("email").value.trim();
     const fullname = $("fullname").value.trim();
-    if (username.length < 3) return showAlert("用户名至少 3 个字符");
-    if (password.length < 6) return showAlert("密码至少 6 位");
-    if (password !== $("confirm").value) return showAlert("两次输入的密码不一致");
-    if (!$("agree").checked) return showAlert("请先同意服务条款与隐私政策");
+    if (username.length < 3) return showAlert(t("err_username_len"));
+    if (password.length < 6) return showAlert(t("err_password_len"));
+    if (password !== $("confirm").value) return showAlert(t("err_password_mismatch"));
+    if (!$("agree").checked) return showAlert(t("err_agree"));
     try {
       const data = await api("/local/register", {
         method: "POST",
         body: JSON.stringify({ username, password: b64(password), email, fullname }),
       });
-      if (data.pending) return showAlert("注册成功，等待管理员审核", "info");
+      if (data.pending) return showAlert(t("err_pending"), "info");
       return afterLogin(data.user);
     } catch (err) { return showAlert(err.message); }
   }
@@ -281,12 +492,12 @@ function renderMe(user) {
   $("panel-me").style.display = "block";
   const avatar = user.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.nick_name || user.name || "G")}`;
   $("me-avatar").src = avatar;
-  $("me-name").textContent = user.nick_name || user.name || "已登录";
-  $("me-meta").textContent = `${user.email || "无邮箱"} · ${user.role || "normal"} · id=${user.user_no || user.id}`;
+  $("me-name").textContent = user.nick_name || user.name || t("logged_in") || "已登录";
+  $("me-meta").textContent = `${user.email || t("no_email")} · ${user.role || "normal"} · id=${user.user_no || user.id}`;
   if (next) {
     const btn = $("btn-continue");
     btn.style.display = "flex";
-    btn.textContent = "继续访问应用";
+    btn.textContent = t("continue_app") || "继续访问应用";
     btn.onclick = () => { location.href = next; };
   }
 }
@@ -323,11 +534,12 @@ $("btn-logout").onclick = async () => {
   location.href = "/login" + (next ? "?next=" + encodeURIComponent(next) : "");
 };
 
-const err = params.get("error");
-if (err) showAlert("登录失败：" + (params.get("error_description") || err));
-
+initBranding();
 loadStatus();
 loadMe();
+
+const err = params.get("error");
+if (err) showAlert((t("err_login_failed") || "登录失败：") + (params.get("error_description") || err));
 </script>
 </body>
 </html>

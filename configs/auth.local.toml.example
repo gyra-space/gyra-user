@@ -1,0 +1,29 @@
+# 复制为 configs/auth.local.toml（已在 .gitignore 里），只写需要覆盖的字段。
+# 它叠在 configs/auth.toml 之上：providers 按 id 合并，其余键后者覆盖前者。
+
+# ── 第三方登录密钥 ────────────────────────────────────────────────────
+# 填了 client_id / client_secret，登录页才会出现对应的快速登录入口。
+# 空着 = provider 未启用 = 该入口整块隐藏（不是报错）。
+# 等价的环境变量：GYRA_USER_GITHUB_CLIENT_ID / _CLIENT_SECRET、
+#                GYRA_USER_WECHAT_APP_ID / _APP_SECRET
+
+[[providers]]
+id = "github"
+client_id = "Ov23liXXXXXXXXXXXX"
+client_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# 回调地址填 {public_base_url}/api/v1/auth/oauth/callback
+
+[[providers]]
+id = "wechat"
+client_id = "wxXXXXXXXXXXXXXXXX"      # 开放平台「网站应用」AppID
+client_secret = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# 开放平台里「授权回调域」只填域名，不带协议、不带路径
+
+# ── 本地开发必须显式指定，否则 GitHub / 微信的回调回不来 ──────────────
+# public_base_url = "https://xxxx.ngrok-free.app"
+
+# ── 想临时换左侧文案（要热更就走 /admin 的「品牌文案」）────────────────
+# [branding.apps.default.zh]
+# title = "ACME 身份中心"
+# subtitle = "一个账号，通行全部内部系统。"
+# features = ["统一 OAuth2 / OIDC", "可吊销的会话", "审计日志留痕"]

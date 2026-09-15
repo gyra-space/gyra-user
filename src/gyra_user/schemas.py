@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from gyra_user.branding import BrandingContent, BrandingSlide, BrandingTheme
+
 # ───────────────────────────── requests ───────────────────────────────────
 
 
@@ -101,6 +103,16 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=6, max_length=256)
 
 
+# ───────────────────────── branding / 品牌文案 ────────────────────────────
+
+
+class BrandingUpsertRequest(BaseModel):
+    """Body of ``PUT /admin/branding/{app_id}/{locale}``."""
+
+    content: BrandingContent = Field(default_factory=BrandingContent)
+    is_active: bool = True
+
+
 # ───────────────────────────── responses ──────────────────────────────────
 
 
@@ -168,8 +180,42 @@ class BindingOut(BaseModel):
     email: str = ""
 
 
+class BrandingOut(BaseModel):
+    """Resolved copy for the hosted pages (see :mod:`gyra_user.branding`)."""
+
+    app_id: str = "default"
+    locale: str = "zh"
+    default_locale: str = "zh"
+    app_name: str = ""
+    title: str = ""
+    subtitle: str = ""
+    features: List[str] = Field(default_factory=list)
+    footer: str = ""
+    slides: List[BrandingSlide] = Field(default_factory=list)
+    locales: List[str] = Field(default_factory=list)
+    # Page chrome for the resolved locale, keyed by ``data-i18n`` attribute.
+    ui: Dict[str, str] = Field(default_factory=dict)
+    theme: BrandingTheme = Field(default_factory=BrandingTheme)
+    rotate_interval: int = 0
+    # "override" (admin) | "config" | "builtin" — tells an operator where the
+    # copy on screen actually came from.
+    source: str = "builtin"
+
+
+class BrandingOverrideOut(BaseModel):
+    app_id: str
+    locale: str
+    is_active: bool = True
+    payload: BrandingContent = Field(default_factory=BrandingContent)
+    gmt_create: Optional[datetime] = None
+    gmt_modify: Optional[datetime] = None
+
+
 __all__ = [
     "BindingOut",
+    "BrandingOut",
+    "BrandingOverrideOut",
+    "BrandingUpsertRequest",
     "ChangePasswordRequest",
     "ClientCreateRequest",
     "ClientUpdateRequest",

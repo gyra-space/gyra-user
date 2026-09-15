@@ -1,6 +1,7 @@
 # Gyra 用户中心配置
-# 优先级: 默认值 < 本文件 < GYRA_USER_* 环境变量
-# 复制为 configs/auth.local.toml 或直接用环境变量覆盖密钥，不要把密钥提交到仓库。
+# 优先级: 默认值 < 本文件 < configs/auth.local.toml（已 gitignore）< GYRA_USER_* 环境变量
+# 密钥别写在这里：复制 configs/auth.local.toml.example 为 configs/auth.local.toml，
+# 只写需要覆盖的字段即可（providers 按 id 合并）。
 
 app_name = "Gyra User Center"
 data_dir = "data"
@@ -37,7 +38,12 @@ require_approval = false
 default_role = "normal"
 
 # ── 行为 ──────────────────────────────────────────────────────────────
+# 邮箱只有在「双方都验证过」时才能当作身份锚点：OAuth 侧声明已验证，且本地
+# 账号的邮箱也验证过。否则谁先抢注别人的邮箱，就能吞掉对方后续的 OAuth 登录。
+# 详见 UserService._link_target_by_email。
 link_by_email = true           # OAuth 邮箱命中已有账号时自动绑定
+link_by_email_requires_verified = true   # 关掉会退回不安全的旧行为，生产别关
+reclaim_unverified_email = true          # 未验证账号占用的邮箱，交还给能证明所有权的一方
 auth_required = true
 frontend_login_path = "/login"
 frontend_callback_path = "/auth/callback"
@@ -88,3 +94,35 @@ scope = "snsapi_login"
 # name_path = "name"
 # email_path = "email"
 # avatar_path = "picture"
+
+# ── 登录页品牌文案 ────────────────────────────────────────────────────
+# 左侧面板的内容按 (app_id, locale) 解析，缺省时逐级回退：
+#   app+locale → app+默认语言 → default+locale → default+默认语言 → 内置文案
+# 不改配置也能改文案：在 /admin 的「品牌文案」里保存，下一次刷新即生效。
+[branding]
+default_locale = "zh"
+locales = ["zh", "en"]         # 开放给访客切换的语言
+rotate_interval = 6            # 左侧多屏轮播间隔（秒），0 = 不轮播
+
+[branding.theme]
+primary = "#4f46e5"            # 接入应用可以各用各的品牌色
+primary_hover = "#4338ca"
+
+# 单个应用的文案：app_id 用 OIDC 的 client_id，default 是兜底。示例——
+# [branding.apps.default.zh]
+# app_name = "Gyra 用户中心"
+# title = "Gyra 用户中心"
+# subtitle = "统一认证，一次登录全站通行。"
+# features = ["标准 OAuth2 授权码流程", "内置 OIDC Provider"]
+#
+# 想要多屏轮播就写 slides（非空时优先于上面的 title / features）：
+# [[branding.apps.default.zh.slides]]
+# title = "一次登录，全站通行"
+# subtitle = "内置 OIDC Provider，接入应用无需各自维护账号体系。"
+# features = ["授权码 + PKCE", "Refresh Token 可吊销", "跨子域共享登录态"]
+#
+# [[branding.apps.default.zh.slides]]
+# title = "微信、GitHub 都能登"
+# subtitle = "同一 unionid 打通公众号与网站应用，同人同账号。"
+# features = ["snsapi_login 扫码", "邮箱命中自动绑定"]
+

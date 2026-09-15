@@ -12,20 +12,23 @@ or embed it in Gyra::
 
 from __future__ import annotations
 
+import json
 import logging
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 from gyra_user import deps
 from gyra_user.account import create_account_router
 from gyra_user.admin import create_admin_router
+from gyra_user.branding import resolve_with_session
 from gyra_user.config import Settings, load_settings
 from gyra_user.db import init_engine
 from gyra_user.oidc import create_oidc_router
@@ -33,10 +36,30 @@ from gyra_user.router import create_auth_router
 
 logger = logging.getLogger(__name__)
 
+#: Used when the distribution metadata is missing *or* unreadable. A
+#: half-finished reinstall leaves a dist-info directory behind whose Version
+#: cannot be read, and FastAPI refuses to build an app from a falsy version —
+#: a cosmetic detail must not be able to stop the service from booting.
+_FALLBACK_VERSION = "0.0.0+dev"
+
 try:
-    __version__ = _pkg_version("gyra-user")
+    __version__ = _pkg_version("gyra-user") or _FALLBACK_VERSION
 except PackageNotFoundError:  # running from a source checkout
-    __version__ = "0.0.0+dev"
+    __version__ = _FALLBACK_VERSION
+
+# `login.html` ships with this token where the branding payload goes; the
+# string is deliberately invalid JSON so a half-rendered page fails loudly in
+# dev instead of silently showing stale copy.
+BRANDING_PLACEHOLDER = "/*__BRANDING_JSON__*/"
+
+
+def _inline_json(payload: Dict[str, Any]) -> str:
+    """Serialise for a ``<script type="application/json">`` block.
+
+    ``</script>`` anywhere in the copy would close the tag early, so every
+    ``</`` is escaped — still valid JSON, still parsed by ``JSON.parse``.
+    """
+    return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
 
 
 def _check_configuration(settings: Settings) -> None:
@@ -99,19 +122,33 @@ def create_app(
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    def page(name: str):
+    def page(name: str, branding: Optional[Dict[str, Any]] = None):
         target = static_dir / name
-        if target.is_file():
+        if not target.is_file():
+            return JSONResponse({"detail": f"{name} not bundled"}, status_code=404)
+        if branding is None:
             return FileResponse(str(target))
-        return JSONResponse({"detail": f"{name} not bundled"}, status_code=404)
+        # Inlining the copy keeps the first paint correct — fetching it after
+        # the HTML lands would flash the fallback markup on every page load.
+        html = target.read_text(encoding="utf-8").replace(
+            BRANDING_PLACEHOLDER, _inline_json(branding)
+        )
+        return HTMLResponse(html)
 
     @app.get("/healthz", tags=["System"])
     async def healthz():
         return {"status": "ok", "service": settings.app_name}
 
     @app.get("/login", include_in_schema=False)
-    async def login_page():
-        return page("login.html")
+    async def login_page(
+        app_id: str = Query("", alias="app", description="接入应用 id"),
+        lang: str = Query("", description="语言，如 zh / en"),
+        session: Session = Depends(deps.get_db),
+    ):
+        branding = resolve_with_session(
+            session, settings.branding, app_id=app_id, locale=lang
+        )
+        return page("login.html", branding)
 
     @app.get("/account", include_in_schema=False)
     async def account_page():
@@ -122,10 +159,17 @@ def create_app(
         return page("admin.html")
 
     @app.get("/", include_in_schema=False)
-    async def root():
+    async def root(
+        app_id: str = Query("", alias="app", description="接入应用 id"),
+        lang: str = Query("", description="语言，如 zh / en"),
+        session: Session = Depends(deps.get_db),
+    ):
         index = static_dir / "login.html"
         if index.is_file():
-            return FileResponse(str(index))
+            branding = resolve_with_session(
+                session, settings.branding, app_id=app_id, locale=lang
+            )
+            return page("login.html", branding)
         return {
             "service": settings.app_name,
             "docs": "/docs",

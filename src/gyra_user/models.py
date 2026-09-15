@@ -365,9 +365,34 @@ class UserConsent(Base):
         return [item for item in (self.scope or "").split() if item]
 
 
+class BrandingOverride(Base):
+    """Admin-edited brand copy, layered over the ``[branding]`` config.
+
+    One row per ``(app_id, locale)``. Keeping the copy in the database is what
+    lets an operator change the login page without a redeploy; a deployment
+    that never writes a row simply resolves from the config file.
+    """
+
+    __tablename__ = "branding_overrides"
+    __table_args__ = (
+        UniqueConstraint("app_id", "locale", name="uq_branding_app_locale"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    app_id = Column(String(64), nullable=False, index=True, default="default")
+    locale = Column(String(16), nullable=False, default="zh")
+    # Serialised BrandingContent (see gyra_user.branding).
+    payload = Column(Text, nullable=False, default="{}")
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    gmt_create = Column(DateTime, nullable=False, default=_utcnow)
+    gmt_modify = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
 __all__ = [
     "AuthorizationCode",
     "Base",
+    "BrandingOverride",
     "LoginEvent",
     "OAuthAccount",
     "OAuthClient",
